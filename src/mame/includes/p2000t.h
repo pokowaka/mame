@@ -15,7 +15,10 @@
 #include "sound/spkrdev.h"
 #include "video/saa5050.h"
 #include "emupal.h"
+#include "imagedev/cassette.h"
+#include "machine/timer.h"
 
+#include <chrono>
 
 class p2000t_state : public driver_device
 {
@@ -25,6 +28,7 @@ public:
 		, m_videoram(*this, "videoram")
 		, m_maincpu(*this, "maincpu")
 		, m_speaker(*this, "speaker")
+		, m_cassette(*this, "tape")
 		, m_keyboard(*this, "KEY.%u", 0)
 	{
 	}
@@ -44,6 +48,7 @@ protected:
 	uint8_t videoram_r(offs_t offset);
 
 	INTERRUPT_GEN_MEMBER(p2000_interrupt);
+	TIMER_DEVICE_CALLBACK_MEMBER(rdc_1);
 
 	void p2000t_mem(address_map &map);
 	void p2000t_io(address_map &map);
@@ -52,13 +57,17 @@ protected:
 
 	required_device<cpu_device> m_maincpu;
 	required_device<speaker_sound_device> m_speaker;
+	required_device<cassette_image_device> m_cassette;
+
 
 private:
 	required_ioport_array<10> m_keyboard;
+	bool m_rdc_1;
 	uint8_t m_port_101f;
 	uint8_t m_port_202f;
 	uint8_t m_port_303f;
 	uint8_t m_port_707f;
+	uint64_t m_testing;
 };
 
 class p2000m_state : public p2000t_state

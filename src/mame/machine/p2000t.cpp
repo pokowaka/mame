@@ -11,6 +11,8 @@
 
 #include "emu.h"
 #include "includes/p2000t.h"
+#include <chrono>
+#include <iostream>
 
 #define P2000M_101F_CASDAT  0x01
 #define P2000M_101F_CASCMD  0x02
@@ -31,6 +33,32 @@
 #define P2000M_303F_VIDEO   0x01
 
 #define P2000M_707F_DISA    0x01
+
+
+
+struct FakeCas {
+  enum Direction { Stop, Rev, Fwd };
+
+  Direction move{Stop};
+  uint64_t counter{5000};
+  std::vector<uint8_t> data;
+  int write{true};
+  int inpos{true};
+};
+
+static FakeCas fcas{};
+
+TIMER_DEVICE_CALLBACK_MEMBER(p2000t_state::rdc_1)
+{
+	m_rdc_1 = true;
+
+	if (fcas.move == FakeCas::Direction::Rev && fcas.counter > 0) {
+		fcas.counter--;
+	}
+	if (fcas.move == FakeCas::Direction::Fwd) {
+		fcas.counter++;
+	}
+}
 
 /*
     Keyboard port 0x0x
@@ -62,7 +90,7 @@ uint8_t p2000t_state::p2000t_port_000f_r(offs_t offset)
 		return 0xff;
 }
 
-
+#define set_bit(l, x) l |= (1 << x);
 /*
     Input port 0x2x
 
@@ -74,10 +102,76 @@ uint8_t p2000t_state::p2000t_port_000f_r(offs_t offset)
     bit 5 - Begin/end of tape
     bit 6 - Cassette read clock
     bit 7 - Cassette read data
+
+	It looks like we need to flip the bits..
 */
 uint8_t p2000t_state::p2000t_port_202f_r()
 {
-	return (0xff);
+	/*
+	Cassette input consists of three status signals, a data signal and a clock
+	signal. The Write Enabe (WEN) signal is coming from the switch on the drive
+	which is activated when a write enabled plug is added to the cassette
+	medium. Cassette in Position (CIP) is active when a casette is loaded on the
+	drive and the door is closed. Begin and End of Tape (BET) is signalled by
+	the drive as a condition to stop the tape transport.
+
+	The Read Data (RDA) from the casette is a serial bit pattern in Phase
+	Encoded format. The Read Clock (RDC) is active at now of every new bit
+	This clock-pulse is triggering the cassette timing flip-flop. The flip
+	flop toggles on every clock pulse thus offering a timing signal (RDC 1)
+	in phase with received data. The monitor program checks during a cassette
+	read operation a change of the RDC 1 signal and then loads the value on
+	RAD as a next bit.
+
+	        1   0   1   1   0   0
+	 RDA:  _----____--__----__--__--
+     RDC:  _-___-___-___-___-___-___
+
+	 A phase is 166 us. (W00t 6024 bits/s!)
+	*/
+
+	// std::cout << m_cassette->get_position();
+	uint8_t state = 0x0;
+
+	// cass available..
+	uint8_t res = 0xff & (~(1 << 4));
+	uint8_t stop = (~(1 << 5));
+	if (fcas.write) {
+		//set_bit(state, 3); // Write able..
+		res = res & (~(1 << 3));
+	}
+	if (fcas.inpos)
+		set_bit(state, 4); // Cassette available?
+	if (fcas.move == FakeCas::Direction::Rev) {
+		fcas.counter--;
+	}
+	if (fcas.move == FakeCas::Direction::Fwd) {
+		fcas.counter++;
+	}
+
+	if (fcas.counter == 0 || fcas.counter == fcas.data.size()) {
+		if (fcas.move != FakeCas::Direction::Stop) {
+			res = res & stop;
+			std::cout << "Stop" << std::endl;
+		}
+	} else {
+	set_bit(state, 5);
+	}
+	if (m_rdc_1)
+	{
+		set_bit(state, 6);
+		m_rdc_1 = false;
+	}
+	if (fcas.counter < fcas.data.size() && fcas.data[fcas.counter]) {
+		set_bit(state, 7); // 0 bit?
+	}
+	// It looks like we need to flip the bits..
+
+	static uint8_t status = 0;
+	//std::cout << ":R " << std::hex << (int) state << std::dec << ", " << fcas.counter << std::endl;
+	status++;
+	// 0xb2c
+	return res;
 }
 
 
@@ -96,6 +190,39 @@ uint8_t p2000t_state::p2000t_port_202f_r()
 void p2000t_state::p2000t_port_101f_w(uint8_t data)
 {
 	m_port_101f = data;
+	/*
+
+	The CASSETTE is controlled by 4 output lines. Forward (FWD) and rewind
+	(RWD) are two motorcontrol signals to activate the motor in either
+	forward or reverse driection. Data is written via dt WDA line which is on
+	the drive enabled when the WCD line is also active. The control of the
+	motor and translation of data to a serial bitpattern in Phase Encoded (PE)
+	format is controlled via routines in the Monitor - Rom.
+	*/
+	// auto now = std::chrono::microseconds(std::chrono::system_clock::now().time_since_epoch()).count();
+	// if (data != 0 && data != 0x40)
+	// 	std::cout << now << ":W 0x" << std::hex << (int) data << std::dec << std::endl;
+	if (BIT(data, 0) || BIT(data, 1)) {
+		std::cout << "W: " << data << "CWD|CWC" << std::endl;
+	}
+	if (BIT(data, 2)) {
+		std::cout << "W: Rewind" << std::endl;
+		fcas.data.resize(64 * 1024);
+		for(int i = 0; i < fcas.data.size(); i++) {
+			fcas.data[i] = i % 2;
+		}
+		fcas.move = FakeCas::Direction::Rev;
+	}
+
+	if (BIT(data, 3)) {
+		std::cout <<"W: Forward" << std::endl;
+		fcas.move = FakeCas::Direction::Fwd;
+	}
+
+	if (!BIT(data, 3) && !BIT(data, 2)) {
+		fcas.move = FakeCas::Direction::Stop;
+		std::cout <<  "W: STOP" << std::endl;
+	}
 }
 
 /*
