@@ -13,6 +13,7 @@
 #include "includes/p2000t.h"
 #include <chrono>
 #include <iostream>
+#include <bitset>
 
 #define P2000M_101F_CASDAT  0x01
 #define P2000M_101F_CASCMD  0x02
@@ -131,17 +132,14 @@ uint8_t p2000t_state::p2000t_port_202f_r()
 	*/
 
 	// std::cout << m_cassette->get_position();
-	uint8_t state = 0x0;
-
+	std::bitset<8> state;
 	// cass available..
-	uint8_t res = 0xff & (~(1 << 4));
-	uint8_t stop = (~(1 << 5));
+	state.set(4, 1);
 	if (fcas.write) {
-		//set_bit(state, 3); // Write able..
-		res = res & (~(1 << 3));
+		state.set(3, 1);
 	}
-	if (fcas.inpos)
-		set_bit(state, 4); // Cassette available?
+	// if (fcas.inpos)
+	// 	set_bit(state, 4); // Cassette available?
 	if (fcas.move == FakeCas::Direction::Rev) {
 		fcas.counter--;
 	}
@@ -151,27 +149,21 @@ uint8_t p2000t_state::p2000t_port_202f_r()
 
 	if (fcas.counter == 0 || fcas.counter == fcas.data.size()) {
 		if (fcas.move != FakeCas::Direction::Stop) {
-			res = res & stop;
+			state.set(5, 1);
 			std::cout << "Stop" << std::endl;
 		}
-	} else {
-	set_bit(state, 5);
 	}
 	if (m_rdc_1)
 	{
-		set_bit(state, 6);
+		//set_bit(state, 6);
 		m_rdc_1 = false;
 	}
 	if (fcas.counter < fcas.data.size() && fcas.data[fcas.counter]) {
-		set_bit(state, 7); // 0 bit?
+		//set_bit(state, 7); // 0 bit?
 	}
 	// It looks like we need to flip the bits..
-
-	static uint8_t status = 0;
-	//std::cout << ":R " << std::hex << (int) state << std::dec << ", " << fcas.counter << std::endl;
-	status++;
-	// 0xb2c
-	return res;
+	uint8_t status = (~(state.to_ulong())) & 0xFF;
+	return status;
 }
 
 
