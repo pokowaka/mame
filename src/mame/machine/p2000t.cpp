@@ -35,27 +35,55 @@
 
 #define P2000M_707F_DISA 0x01
 
-struct FakeCas {
-  enum Direction { Stop, Rev, Fwd };
-
-  Direction move{Stop};
-  uint64_t counter{5000};
+struct MiniCas {
+  MiniCas() { data.resize(4 * 1024 * 8); }
+  enum Direction { Stop, Rev };
+  Direction dir = Direction::Stop;
   std::vector<uint8_t> data;
-  int write{true};
-  int inpos{true};
+  uint32_t pos = 512;
+
+  bool valid() { return pos > 0 && pos < data.size(); }
+
+  void fwd() {
+    // TODO mutex.
+    dir = Direction::Stop;
+    if (pos < data.size()) {
+      pos++;
+    }
+    std::cout << ">" << pos << std::endl;
+  }
+
+  void rev() { std::cout << "B" << std::endl; dir = Direction::Rev; }
+
+  void move() {
+    if (dir == Direction::Rev && pos > 0) {
+      pos--;
+      std::cout << "<" << pos << std::endl;
+    }
+  }
+
+  void stop() {
+	  // a stopped tape is valid.
+    dir = Direction::Stop;
+    if (pos == 0)
+      pos = 1;
+	if (pos == data.size())
+	  pos = data.size() - 1;
+  }
+
+  void write(bool bit) {
+    if (valid())
+      data[pos - 1] = bit;
+  }
+
+  bool read() { return valid() && data[pos - 1] == 1; }
 };
 
-static FakeCas fcas{};
+static MiniCas cas;
 
 TIMER_DEVICE_CALLBACK_MEMBER(p2000t_state::rdc_1) {
-  m_rdc_1 = true;
-
-  if (fcas.move == FakeCas::Direction::Rev && fcas.counter > 0) {
-    fcas.counter--;
-  }
-  if (fcas.move == FakeCas::Direction::Fwd) {
-    fcas.counter++;
-  }
+  m_rdc_1 = !m_rdc_1;
+  cas.move();
 }
 
 /*
@@ -121,34 +149,18 @@ the ROC 1 signal and then loads the value on RDA as a next bit.
 
   // std::cout << m_cassette->get_position();
   std::bitset<8> state;
-  // cass available..
+  // Cassette is available, and always writeable.
+  state.set(3, 1);
   state.set(4, 1);
-  if (fcas.write) {
-    state.set(3, 1);
-  }
-  // if (fcas.inpos)
-  // 	set_bit(state, 4); // Cassette available?
-  if (fcas.move == FakeCas::Direction::Rev) {
-    fcas.counter--;
-  }
-  if (fcas.move == FakeCas::Direction::Fwd) {
-    fcas.counter++;
-  }
-
-  if (fcas.counter == 0 || fcas.counter == fcas.data.size()) {
-    if (fcas.move != FakeCas::Direction::Stop) {
-      state.set(5, 1);
-      std::cout << "Stop" << std::endl;
-    }
-  }
-  if (m_rdc_1) {
-    // set_bit(state, 6);
-    m_rdc_1 = false;
-  }
-  if (fcas.counter < fcas.data.size() && fcas.data[fcas.counter]) {
-    // set_bit(state, 7); // 0 bit?
-  }
+  state.set(5, !cas.valid());
+  state.set(6, m_rdc_1);
+  state.set(7, cas.read());
   // It looks like we need to flip the bits..
+  if (!cas.valid()) {
+    std::cout << state << " " << (m_rdc_1 ? "H" : "L") << "  "
+              << (cas.valid() ? "" : "E") << std::endl;
+	// cas.stop();
+  }
   uint8_t status = (~(state.to_ulong())) & 0xFF;
   return status;
 }
@@ -166,37 +178,37 @@ the ROC 1 signal and then loads the value on RDA as a next bit.
     bit 7 - Printer output
 */
 void p2000t_state::p2000t_port_101f_w(uint8_t data) {
+  // 08BD calls this.
   m_port_101f = data;
   std::bitset<8> state(data);
 
   /*
-	The CASSETTE is controlled by 4 output lines. Forward (FWD) and rewind
-	(RWD) are two motor control signals to activate the motor in either forward
-	or reverse direction. Data is written to the cassette via the Write Data
-	(WDA) line, which is on the drive enabled when the Write Command (WCD) line
-	is also active. The control of the motor and translation of data to
-	a--serial bitpattern in Phase Encoded (PE) format is controlled via
-	routines in the Monitor -Rom.
+        The CASSETTE is controlled by 4 output lines. Forward (FWD) and rewind
+        (RWD) are two motor control signals to activate the motor in either
+     forward or reverse direction. Data is written to the cassette via the Write
+     Data (WDA) line, which is on the drive enabled when the Write Command (WCD)
+     line is also active. The control of the motor and translation of data to
+        a--serial bitpattern in Phase Encoded (PE) format is controlled via
+        routines in the Monitor -Rom.
   */
 
   if (state.test(1)) {
     std::cout << "W: " << state.test(0);
+    cas.write(state.test(0));
   }
+
   if (state.test(2)) {
-    std::cout << "<" << std::endl;
-    fcas.move = FakeCas::Direction::Rev;
+    // std::cout << "B" << std::endl;
+    cas.rev();
   }
 
   if (state.test(3)) {
-    std::cout << ">" << std::endl;
-    fcas.move = FakeCas::Direction::Fwd;
+    // std::cout << "F" << std::endl;
+    cas.fwd();
   }
 
   if (!state.test(2) && !state.test(3)) {
-	  if (fcas.move != FakeCas::Direction::Stop) {
-    	fcas.move = FakeCas::Direction::Stop;
-    	std::cout << ">" << std::endl;
-	  }
+    cas.stop();
   }
 }
 

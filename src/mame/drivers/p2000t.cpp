@@ -252,7 +252,7 @@ void p2000t_state::p2000t(machine_config &config)
 	m_cassette->set_interface("p2000t_cass");
 	m_cassette->add_route(ALL_OUTPUTS, "mono", 0.05);
 
-	/* Read Clock  (RDC 1) */
+	/* Read Clock (RDC 1) */
 	TIMER(config, "rdc_1").configure_periodic(FUNC(p2000t_state::rdc_1), attotime::from_usec(166));
 }
 
